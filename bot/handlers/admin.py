@@ -1,88 +1,63 @@
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
-from aiogram.utils.media_group import MediaGroupBuilder
-
+import aiosqlite
 from bot.database import (
-    get_ticket, update_ticket_admin, get_ticket_by_ref,
-    close_ticket_status
+    get_tickets_paginated, get_tickets_count, get_ticket,
+    update_ticket_admin, close_ticket_status, get_ticket_by_ref, save_message_ref
 )
-from bot.keyboards import feedback_kb
-from bot.utils.logger import log_event
+from bot.keyboards import tickets_list_kb, ticket_take_kb, feedback_kb
+from bot.config import ADMIN_IDS, DB_PATH
 
 router = Router()
 
 
-@router.callback_query(F.data.startswith("take_"))
-async def take_ticket_handler(callback: CallbackQuery, bot: Bot):
+@router.message(F.text.in_(["Открытые заявки", "Архив заявок"]))
+async def show_list(message: Message):
+    if message.from_user.id not in ADMIN_IDS: return
+    status = 'open' if message.text == "Открытые заявки" else 'closed'
+    count = await get_tickets_count(status)
+    tickets = await get_tickets_paginated(status, 1)
+    await message.answer(f"📂 {message.text}:", reply_markup=tickets_list_kb(tickets, 1, count, status))
+
+
+@router.callback_query(F.data.startswith("list_"))
+async def list_nav(callback: CallbackQuery):
+    _, status, page = callback.data.split("_")
+    page = int(page)
+    count = await get_tickets_count(status)
+    tickets = await get_tickets_paginated(status, page)
+    await callback.message.edit_reply_markup(reply_markup=tickets_list_kb(tickets, page, count, status))
+
+
+@router.callback_query(F.data.startswith("view_"))
+async def view_ticket_detail(callback: CallbackQuery):
     ticket_id = int(callback.data.split("_")[1])
     ticket = await get_ticket(ticket_id)
-
-    if ticket['admin_id']:
-        await callback.answer("Заявку уже кто-то взял!", show_alert=True)
-        return
-
-    await update_ticket_admin(ticket_id, callback.from_user.id)
-
-    # Обновляем сообщение у админа
-    await callback.message.edit_text(
-        f"✅ Заявку №{ticket_id} взял @{callback.from_user.username}",
-        parse_mode="HTML"
-    )
-
-    # Уведомляем юзера
-    try:
-        await bot.send_message(ticket['user_id'], f"👨‍💻 Администратор подключился к заявке №{ticket_id}.")
-    except:
-        pass
-
-    await log_event(bot, f"Admin {callback.from_user.id} took ticket #{ticket_id}")
+    text = f"🎫 <b>Заявка №{ticket_id}</b>\nСтатус: {ticket['status']}\nЮзер: {ticket['user_id']}"
+    kb = ticket_take_kb(ticket_id) if ticket['status'] == 'open' and not ticket['admin_id'] else None
+    await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-# Обработка ответов админа (Reply)
+@router.callback_query(F.data.startswith("take_"))
+async def take_ticket(callback: CallbackQuery, bot: Bot):
+    tid = int(callback.data.split("_")[1])
+    await update_ticket_admin(tid, callback.from_user.id)
+    await callback.message.edit_text(f"✅ Вы взяли заявку №{tid}")
+    ticket = await get_ticket(tid)
+    await bot.send_message(ticket['user_id'], f"👨‍💻 Админ подключился к заявке №{tid}")
+
+
 @router.message(F.reply_to_message)
-async def admin_reply_to_ticket(message: Message, bot: Bot, album: list[Message] = None):
-    # Пытаемся найти тикет по сообщению, на которое ответили
-    ref_id = message.reply_to_message.message_id
-    ticket_id = await get_ticket_by_ref(message.chat.id, ref_id)
+async def admin_reply(message: Message, bot: Bot):
+    if message.from_user.id not in ADMIN_IDS: return
+    tid = await get_ticket_by_ref(message.chat.id, message.reply_to_message.message_id)
+    if not tid: return
 
-    if not ticket_id:
-        return  # Это просто общение админов между собой
-
-    ticket = await get_ticket(ticket_id)
-    if ticket['status'] != 'open':
-        await message.answer("⚠️ Заявка закрыта. Чтобы написать пользователю, он должен создать новую.")
-        return
-
-    # Логика закрытия заявки через команду /close
+    ticket = await get_ticket(tid)
     if message.text == "/close":
-        await close_ticket_status(ticket_id)
-        await message.answer(f"🏁 Заявка №{ticket_id} закрыта.")
-        try:
-            await bot.send_message(
-                ticket['user_id'],
-                f"Ваша заявка №{ticket_id} закрыта.\nВаша проблема решена?",
-                reply_markup=feedback_kb(ticket_id)
-            )
-        except:
-            pass
-        await log_event(bot, f"Admin {message.from_user.id} closed ticket #{ticket_id}")
-        return
-
-    # Отправка ответа пользователю (Анонимно, через копирование)
-    try:
-        user_id = ticket['user_id']
-        msgs = album if album else [message]
-
-        if album:
-            mg = MediaGroupBuilder()
-            for m in msgs:
-                if m.photo:
-                    mg.add_photo(m.photo[-1].file_id)
-                elif m.document:
-                    mg.add_document(m.document.file_id)
-            await bot.send_media_group(user_id, media=mg.build())
-        else:
-            await message.copy_to(chat_id=user_id)
-
-    except Exception as e:
-        await message.answer(f"❌ Ошибка отправки: {e}")
+        await close_ticket_status(tid)
+        await message.answer(f"🏁 Тикет №{tid} закрыт.")
+        await bot.send_message(ticket['user_id'], "Заявка закрыта. Помогло?", reply_markup=feedback_kb(tid))
+    else:
+        # При ответе админа также сохраняем референс, чтобы юзер мог ответить на это сообщение
+        sent = await bot.copy_message(ticket['user_id'], message.chat.id, message.message_id)

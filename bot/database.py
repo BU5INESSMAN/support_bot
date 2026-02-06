@@ -4,7 +4,6 @@ from bot.config import DB_PATH
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица тикетов
         await db.execute("""
             CREATE TABLE IF NOT EXISTS tickets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -14,8 +13,6 @@ async def init_db():
                 created_at INTEGER
             )
         """)
-        # Таблица связок: Сообщение в чате админа <-> Тикет
-        # Это нужно, чтобы понимать, к какому тикету относится Reply админа
         await db.execute("""
             CREATE TABLE IF NOT EXISTS message_refs (
                 admin_chat_id INTEGER,
@@ -26,7 +23,6 @@ async def init_db():
         """)
         await db.commit()
 
-# --- Работа с тикетами ---
 async def create_ticket(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -45,19 +41,29 @@ async def get_active_ticket(user_id):
         ) as cursor:
             return await cursor.fetchone()
 
+async def get_tickets_paginated(status='open', page=1, per_page=10):
+    offset = (page - 1) * per_page
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Ограничиваем архив 100 записями по ТЗ
+        limit_val = 100 if status == 'closed' else 1000
+        query = f"SELECT * FROM (SELECT * FROM tickets WHERE status = ? ORDER BY id DESC LIMIT ?) LIMIT ? OFFSET ?"
+        async with db.execute(query, (status, limit_val, per_page, offset)) as cursor:
+            return await cursor.fetchall()
+
+async def get_tickets_count(status='open'):
+    async with aiosqlite.connect(DB_PATH) as db:
+        limit_val = 100 if status == 'closed' else 1000
+        query = f"SELECT COUNT(*) FROM (SELECT id FROM tickets WHERE status = ? LIMIT ?)"
+        async with db.execute(query, (status, limit_val)) as cursor:
+            res = await cursor.fetchone()
+            return res[0]
+
 async def get_ticket(ticket_id):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)) as cursor:
             return await cursor.fetchone()
-
-async def count_active_tickets(user_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT COUNT(*) FROM tickets WHERE user_id = ? AND status = 'open'",
-            (user_id,)
-        ) as cursor:
-            return (await cursor.fetchone())[0]
 
 async def update_ticket_admin(ticket_id, admin_id):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -69,26 +75,15 @@ async def close_ticket_status(ticket_id):
         await db.execute("UPDATE tickets SET status = 'closed' WHERE id = ?", (ticket_id,))
         await db.commit()
 
-async def reopen_ticket_status(ticket_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE tickets SET status = 'open' WHERE id = ?", (ticket_id,))
-        await db.commit()
-
-# --- Работа с референсами сообщений ---
 async def save_message_ref(admin_chat_id, admin_message_id, ticket_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO message_refs (admin_chat_id, admin_message_id, ticket_id) VALUES (?, ?, ?)",
-            (admin_chat_id, admin_message_id, ticket_id)
-        )
+        await db.execute("INSERT OR REPLACE INTO message_refs VALUES (?, ?, ?)",
+                         (admin_chat_id, admin_message_id, ticket_id))
         await db.commit()
 
 async def get_ticket_by_ref(admin_chat_id, admin_message_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT ticket_id FROM message_refs WHERE admin_chat_id = ? AND admin_message_id = ?",
-            (admin_chat_id, admin_message_id)
-        ) as cursor:
+        async with db.execute("SELECT ticket_id FROM message_refs WHERE admin_chat_id = ? AND admin_message_id = ?",
+                             (admin_chat_id, admin_message_id)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
-
