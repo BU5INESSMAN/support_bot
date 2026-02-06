@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: support_bot
+    restart: always
+    volumes:
+      # Прокидываем папку data наружу, чтобы БД не удалялась при пересоздании контейнера
+      - ./data:/app/data
+    env_file:
+      - .env
