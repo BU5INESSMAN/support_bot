@@ -5,14 +5,29 @@ from bot.config import DB_PATH
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS tickets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                admin_id INTEGER DEFAULT NULL,
-                status TEXT DEFAULT 'open', 
-                created_at INTEGER
-            )
-        """)
+                         CREATE TABLE IF NOT EXISTS tickets
+                         (
+                             id
+                             INTEGER
+                             PRIMARY
+                             KEY
+                             AUTOINCREMENT,
+                             user_id
+                             INTEGER,
+                             admin_id
+                             INTEGER
+                             DEFAULT
+                             NULL,
+                             status
+                             TEXT
+                             DEFAULT
+                             'open',
+                             first_msg_id
+                             INTEGER,
+                             created_at
+                             INTEGER
+                         )
+                         """)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS message_refs (
                 admin_chat_id INTEGER,
@@ -34,11 +49,11 @@ async def init_db():
                          """)
         await db.commit()
 
-async def create_ticket(user_id):
+async def create_ticket(user_id, first_msg_id):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "INSERT INTO tickets (user_id, status, created_at) VALUES (?, 'open', ?)",
-            (user_id, int(time.time()))
+            "INSERT INTO tickets (user_id, status, first_msg_id, created_at) VALUES (?, 'open', ?, ?)",
+            (user_id, first_msg_id, int(time.time()))
         )
         await db.commit()
         return cursor.lastrowid

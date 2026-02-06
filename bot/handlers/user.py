@@ -24,8 +24,9 @@ async def cmd_start(message: Message):
         )
     else:
         await message.answer(
-            f"Привет! Это техподдержка <b>{SERVICE_NAME}</b>. 🏝\n"
-            "Опишите вашу проблему в одном сообщении, и мы создадим заявку.",
+            f"Привет! Это техподдержка **{SERVICE_NAME}**\n"
+            "Опишите вашу проблему в одном сообщении, и мы создадим заявку.\n"
+            "Бот поддерживает отправку медиа (Фото, Видео, Звук, PDF)\n",
             parse_mode="HTML"
         )
 
@@ -41,25 +42,35 @@ async def handle_user_message(message: Message, bot: Bot, album: list[Message] =
         # Ищем активную открытую заявку
     active_ticket = await get_active_ticket(message.from_user.id)
 
-    # 1. Если заявки нет — создаем новую
     if not active_ticket:
         try:
-            ticket_id = await create_ticket(message.from_user.id)
+            # 1. Создаем тикет в БД
+            ticket_id = await create_ticket(message.from_user.id, message.message_id)
             await message.answer(f"✅ Заявка №{ticket_id} создана. Ожидайте ответа оператора.")
 
-            # Рассылаем уведомление всем админам
+            # 2. Формируем текст для админов (берем текст или описание медиа)
+            user_text = message.text or message.caption or "[Медиа-файл]"
+            # Обрезаем слишком длинные сообщения, чтобы не ломать верстку телеграма
+            preview_text = (user_text[:200] + '...') if len(user_text) > 200 else user_text
+
+            admin_alert_text = (
+                f"🆕 <b>Новая заявка №{ticket_id}</b>\n"
+                f"👤 От: @{message.from_user.username or message.from_user.id}\n"
+                f"📝 <b>Текст:</b> <i>{preview_text}</i>"
+            )
+
+            # 3. Рассылаем уведомление
             for admin_id in ADMIN_IDS:
                 try:
                     sent = await bot.send_message(
                         admin_id,
-                        f"🆕 <b>Новая заявка №{ticket_id}</b>\nОт: @{message.from_user.username or message.from_user.id}",
+                        admin_alert_text,
                         reply_markup=ticket_take_kb(ticket_id),
                         parse_mode="HTML"
                     )
-                    # Сохраняем ID сообщения, чтобы потом удалить кнопки у всех
                     await save_admin_notification(ticket_id, admin_id, sent.message_id)
                 except Exception as e:
-                    logging.error(f"Ошибка уведомления админа {admin_id}: {e}")
+                    logging.error(f"Ошибка уведомления админа: {e}")
             return
         except Exception as e:
             logging.error(f"Ошибка при создании тикета: {e}")

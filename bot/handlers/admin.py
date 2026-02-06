@@ -16,26 +16,43 @@ async def take_ticket(callback: CallbackQuery, bot: Bot):
     ticket = await get_ticket(tid)
 
     if ticket['admin_id']:
-        await callback.answer("⚠️ Эту заявку уже забрали!", show_alert=True)
+        await callback.answer("⚠️ Эту заявку уже забрали!")
         return
 
     await update_ticket_admin(tid, callback.from_user.id)
 
-    # ЛОГИКА УДАЛЕНИЯ КНОПОК У ВСЕХ
+    # Можно извлечь старый текст из сообщения, чтобы не потерять его при редактировании
+    old_text = callback.message.text.split("📝 Текст:")[0] if "📝 Текст:" in callback.message.text else f"Заявка №{tid}"
+
     notifications = await get_admin_notifications(tid)
     for auth in notifications:
         try:
             await bot.edit_message_text(
                 chat_id=auth['admin_id'],
                 message_id=auth['message_id'],
-                text=f"✅ <b>Заявку №{tid} взял @{callback.from_user.username}</b>",
+                text=f"{old_text}\n\n✅ <b>Взял: @{callback.from_user.username}</b>",
                 parse_mode="HTML"
             )
+            await save_message_ref(auth['admin_id'], auth['message_id'], tid)
         except:
-            pass  # Если админ удалил сообщение с кнопкой
+            pass
 
-    # Уведомляем пользователя и устанавливаем контакт
-    await bot.send_message(ticket['user_id'], f"👨‍💻 Админ подключился к заявке №{tid}. Ждем ваш вопрос.")
+    # 2. АВТО-ПЕРЕСЫЛКА ПЕРВОГО СООБЩЕНИЯ
+    try:
+        sent = await bot.copy_message(
+            chat_id=callback.from_user.id,
+            from_chat_id=ticket['user_id'],
+            message_id=ticket['first_msg_id']
+        )
+        # Регистрируем это скопированное сообщение в базе ответов
+        await save_message_ref(callback.from_user.id, sent.message_id, tid)
+
+        await callback.message.answer("👆 Выше первое сообщение пользователя. Ответьте на него через Reply.")
+    except Exception as e:
+        await callback.message.answer(
+            "⚠️ Не удалось переслать текст первого сообщения, но вы можете ждать новых сообщений от юзера.")
+
+    await bot.send_message(ticket['user_id'], f"👨‍💻 Оператор на связи.")
     await callback.answer()
 
 
@@ -63,3 +80,4 @@ async def admin_reply(message: Message, bot: Bot):
         # Если админ ответил на сообщение, которого нет в базе связок
         await message.answer(
             "⚠️ Не удалось найти заявку для этого сообщения. Отвечайте именно на сообщение пользователя.")
+
