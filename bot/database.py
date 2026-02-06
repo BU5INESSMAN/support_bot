@@ -21,6 +21,17 @@ async def init_db():
                 PRIMARY KEY (admin_chat_id, admin_message_id)
             )
         """)
+        await db.execute("""
+                         CREATE TABLE IF NOT EXISTS admin_notifications
+                         (
+                             ticket_id
+                             INTEGER,
+                             admin_id
+                             INTEGER,
+                             message_id
+                             INTEGER
+                         )
+                         """)
         await db.commit()
 
 async def create_ticket(user_id):
@@ -34,7 +45,7 @@ async def create_ticket(user_id):
 
 async def get_active_ticket(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+        db.row_factory = aiosqlite.Row # ОБЯЗАТЕЛЬНО
         async with db.execute(
             "SELECT * FROM tickets WHERE user_id = ? AND status = 'open' LIMIT 1",
             (user_id,)
@@ -87,3 +98,15 @@ async def get_ticket_by_ref(admin_chat_id, admin_message_id):
                              (admin_chat_id, admin_message_id)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
+
+async def save_admin_notification(ticket_id, admin_id, message_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO admin_notifications VALUES (?, ?, ?)",
+                         (ticket_id, admin_id, message_id))
+        await db.commit()
+
+async def get_admin_notifications(ticket_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM admin_notifications WHERE ticket_id = ?", (ticket_id,)) as cursor:
+            return await cursor.fetchall()
