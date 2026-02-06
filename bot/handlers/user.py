@@ -1,61 +1,106 @@
+import logging
 from aiogram import Router, F, Bot
 from aiogram.types import Message
-from bot.database import create_ticket, get_active_ticket, save_admin_notification
+from aiogram.utils.media_group import MediaGroupBuilder
+from bot.database import (
+    create_ticket,
+    get_active_ticket,
+    save_admin_notification,
+    save_message_ref
+)
 from bot.config import ADMIN_IDS, SERVICE_NAME
 from bot.keyboards import ticket_take_kb, admin_main_menu
-import logging
 
 router = Router()
 
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
+    """Приветствие и инициализация меню для админов"""
     if message.from_user.id in ADMIN_IDS:
-        await message.answer("🛠 Панель администратора активирована.", reply_markup=admin_main_menu())
+        await message.answer(
+            "🛠 Панель администратора активирована.\nИспользуйте кнопки меню для управления заявками.",
+            reply_markup=admin_main_menu()
+        )
     else:
-        await message.answer(f"Привет! Это <b>{SERVICE_NAME}</b>. Опишите вашу проблему:", parse_mode="HTML")
+        await message.answer(
+            f"Привет! Это техподдержка <b>{SERVICE_NAME}</b>. 🏝\n"
+            "Опишите вашу проблему в одном сообщении, и мы создадим заявку.",
+            parse_mode="HTML"
+        )
 
 
 @router.message(F.chat.type == "private")
-async def handle_user_message(message: Message, bot: Bot):
+async def handle_user_message(message: Message, bot: Bot, album: list[Message] = None):
+    """Обработка всех входящих сообщений от пользователей"""
+
+    # Игнорируем сообщения от админов (чтобы они не создавали тикеты сами себе)
     if message.from_user.id in ADMIN_IDS:
         return
 
+        # Ищем активную открытую заявку
     active_ticket = await get_active_ticket(message.from_user.id)
 
-    # Если активного тикета нет — создаем его
+    # 1. Если заявки нет — создаем новую
     if not active_ticket:
         try:
             ticket_id = await create_ticket(message.from_user.id)
-            await message.answer(f"✅ Заявка №{ticket_id} создана. Ожидайте ответа.")
+            await message.answer(f"✅ Заявка №{ticket_id} создана. Ожидайте ответа оператора.")
 
+            # Рассылаем уведомление всем админам
             for admin_id in ADMIN_IDS:
                 try:
                     sent = await bot.send_message(
                         admin_id,
-                        f"🆕 Новая заявка №{ticket_id} от @{message.from_user.username or message.from_user.id}",
-                        reply_markup=ticket_take_kb(ticket_id)
+                        f"🆕 <b>Новая заявка №{ticket_id}</b>\nОт: @{message.from_user.username or message.from_user.id}",
+                        reply_markup=ticket_take_kb(ticket_id),
+                        parse_mode="HTML"
                     )
-                    # Важно: записываем в уведомления для удаления кнопок позже
+                    # Сохраняем ID сообщения, чтобы потом удалить кнопки у всех
                     await save_admin_notification(ticket_id, admin_id, sent.message_id)
                 except Exception as e:
-                    logging.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
-            return  # Выходим, так как админ еще не взял тикет
+                    logging.error(f"Ошибка уведомления админа {admin_id}: {e}")
+            return
         except Exception as e:
             logging.error(f"Ошибка при создании тикета: {e}")
-            await message.answer("Произошла ошибка при создании заявки. Попробуйте позже.")
+            await message.answer("Произошла ошибка. Попробуйте написать позже.")
             return
 
-    # Если тикет есть и его КТО-ТО ВЗЯЛ (есть admin_id)
-    if active_ticket and active_ticket['admin_id']:
-        try:
-            await bot.copy_message(
-                chat_id=active_ticket['admin_id'],
+    # 2. Если заявка есть, но админ ещё не нажал "Забрать"
+    if not active_ticket['admin_id']:
+        await message.answer("⏳ Ваша заявка №{} уже в очереди. Скоро оператор ответит вам.".format(active_ticket['id']))
+        return
+
+    # 3. Если заявка принята админом — пересылаем сообщение ему
+    admin_chat_id = active_ticket['admin_id']
+    ticket_id = active_ticket['id']
+
+    try:
+        if album:
+            # Обработка альбомов (фото/видео)
+            mg = MediaGroupBuilder(caption=f"📨 Сообщение по тикету #{ticket_id}")
+            for m in album:
+                if m.photo:
+                    mg.add_photo(m.photo[-1].file_id)
+                elif m.video:
+                    mg.add_video(m.video.file_id)
+                elif m.document:
+                    mg.add_document(m.document.file_id)
+
+            sent_msgs = await bot.send_media_group(admin_chat_id, media=mg.build())
+            # Привязываем первое сообщение из группы к тикету для Reply
+            await save_message_ref(admin_chat_id, sent_msgs[0].message_id, ticket_id)
+
+        else:
+            # Обычное текстовое или одиночное медиа сообщение
+            sent = await bot.copy_message(
+                chat_id=admin_chat_id,
                 from_chat_id=message.chat.id,
                 message_id=message.message_id
             )
-        except Exception as e:
-            logging.error(f"Ошибка пересылки сообщения админу: {e}")
-    else:
-        # Тикет создан, но админ еще не нажал "Забрать"
-        await message.answer("Ваша заявка еще на рассмотрении. Скоро админ подключится.")
+            # КРИТИЧЕСКИ ВАЖНО: сохраняем связь для возможности ответа
+            await save_message_ref(admin_chat_id, sent.message_id, ticket_id)
+
+    except Exception as e:
+        logging.error(f"Ошибка пересылки сообщения админу {admin_chat_id}: {e}")
+        await message.answer("⚠️ Не удалось доставить сообщение оператору. Попробуйте еще раз.")

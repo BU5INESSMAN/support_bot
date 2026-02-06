@@ -42,18 +42,24 @@ async def take_ticket(callback: CallbackQuery, bot: Bot):
 # Хендлер ответа (Админ -> Юзер)
 @router.message(F.reply_to_message)
 async def admin_reply(message: Message, bot: Bot):
-    if message.from_user.id not in ADMIN_IDS: return
+    if message.from_user.id not in ADMIN_IDS:
+        return
 
-    # Важно: берем тикет по референсу сообщения
+    # Пытаемся найти ID тикета по сообщению, на которое ответил админ
     tid = await get_ticket_by_ref(message.chat.id, message.reply_to_message.message_id)
-    if not tid: return
 
-    ticket = await get_ticket(tid)
-
-    if message.text == "/close":
-        await close_ticket_status(tid)
-        await bot.send_message(ticket['user_id'], "Заявка закрыта.", reply_markup=feedback_kb(tid))
-        await message.answer(f"❌ Тикет №{tid} закрыт.")
+    if tid:
+        ticket = await get_ticket(tid)
+        if message.text == "/close":
+            await close_ticket_status(tid)
+            await bot.send_message(ticket['user_id'], "✅ Ваша проблема решена? (Да/Нет)", reply_markup=feedback_kb(tid))
+            await message.answer(f"🏁 Заявка №{tid} закрыта.")
+        else:
+            # Пересылаем ответ пользователю
+            await bot.copy_message(ticket['user_id'], message.chat.id, message.message_id)
+            # Опционально: ставим реакцию, что сообщение ушло
+            await message.react([{"type": "emoji", "emoji": "📨"}])
     else:
-        # Прямая пересылка пользователю
-        await bot.copy_message(ticket['user_id'], message.chat.id, message.message_id)
+        # Если админ ответил на сообщение, которого нет в базе связок
+        await message.answer(
+            "⚠️ Не удалось найти заявку для этого сообщения. Отвечайте именно на сообщение пользователя.")
