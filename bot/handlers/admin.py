@@ -68,16 +68,57 @@ async def admin_reply(message: Message, bot: Bot):
     if tid:
         ticket = await get_ticket(tid)
         if message.text == "/close":
-            await close_ticket_status(tid)
-            await bot.send_message(ticket['user_id'], "✅ Ваша проблема решена? (Да/Нет)", reply_markup=feedback_kb(tid))
-            await message.answer(f"🏁 Заявка №{tid} закрыта.")
+            # МЫ НЕ ВЫЗЫВАЕМ close_ticket_status(tid) ЗДЕСЬ!
+            # Мы просто спрашиваем пользователя
+            await bot.send_message(
+                ticket['user_id'],
+                f"🛠 Ваша проблема по заявке №{tid} решена?",
+                reply_markup=feedback_kb(tid)
+            )
+            await message.answer(f"⏳ Запрос на подтверждение закрытия №{tid} отправлен пользователю.")
+            return
         else:
             # Пересылаем ответ пользователю
             await bot.copy_message(ticket['user_id'], message.chat.id, message.message_id)
-            # Опционально: ставим реакцию, что сообщение ушло
-            await message.react([{"type": "emoji", "emoji": "📨"}])
     else:
         # Если админ ответил на сообщение, которого нет в базе связок
         await message.answer(
             "⚠️ Не удалось найти заявку для этого сообщения. Отвечайте именно на сообщение пользователя.")
 
+
+@router.callback_query(F.data.startswith("solved_"))
+async def handle_feedback(callback: CallbackQuery, bot: Bot):
+    data = callback.data.split("_")
+    answer = data[1]  # "yes" или "no"
+    tid = int(data[2])
+
+    ticket = await get_ticket(tid)
+    if not ticket:
+        await callback.answer("Заявка не найдена.")
+        return
+
+    if answer == "yes":
+        # Окончательно закрываем тикет в БД
+        await close_ticket_status(tid)
+        await callback.message.edit_text("✅ Спасибо за отзыв! Мы рады, что помогли. Заявка закрыта.")
+
+        # Уведомляем админа, что всё ок
+        if ticket['admin_id']:
+            await bot.send_message(
+                ticket['admin_id'],
+                f"✅ Пользователь подтвердил решение по заявке №{tid}. Она перемещена в архив."
+            )
+
+    elif answer == "no":
+        # Тикет остается open (мы его и не закрывали окончательно в БД)
+        await callback.message.edit_text("⚠️ Заявка возвращена в работу. Оператор скоро свяжется с вами.")
+
+        # Уведомляем админа о проблеме
+        if ticket['admin_id']:
+            await bot.send_message(
+                ticket['admin_id'],
+                f"❌ <b>Внимание!</b>\nПользователь сообщил, что проблема по заявке №{tid} <b>НЕ РЕШЕНА</b>. Она остается открытой, продолжайте диалог.",
+                parse_mode="HTML"
+            )
+
+    await callback.answer()
