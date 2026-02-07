@@ -60,12 +60,9 @@ async def create_ticket(user_id, first_msg_id):
 
 async def get_active_ticket(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row # ОБЯЗАТЕЛЬНО
-        async with db.execute(
-            "SELECT * FROM tickets WHERE user_id = ? AND status = 'open' LIMIT 1",
-            (user_id,)
-        ) as cursor:
-            return await cursor.fetchone()
+        async with db.execute("SELECT id FROM tickets WHERE user_id = ? AND status = 'open'", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return int(row[0]) if row else None
 
 async def get_tickets_paginated(status='open', page=1, per_page=10):
     offset = (page - 1) * per_page
@@ -88,17 +85,17 @@ async def get_tickets_count(status='open'):
 async def get_ticket(ticket_id):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)) as cursor:
+        async with db.execute("SELECT * FROM tickets WHERE id = ?", (int(ticket_id),)) as cursor:
             return await cursor.fetchone()
 
-async def update_ticket_admin(ticket_id, admin_id):
+async def update_ticket_admin(tid, admin_id):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE tickets SET admin_id = ? WHERE id = ?", (admin_id, ticket_id))
+        await db.execute("UPDATE tickets SET admin_id = ? WHERE id = ?", (int(admin_id), int(tid)))
         await db.commit()
 
-async def close_ticket_status(ticket_id):
+async def close_ticket_status(tid):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE tickets SET status = 'closed' WHERE id = ?", (ticket_id,))
+        await db.execute("UPDATE tickets SET status = 'closed' WHERE id = ?", (tid,))
         await db.commit()
 
 async def save_message_ref(admin_chat_id, admin_message_id, ticket_id):

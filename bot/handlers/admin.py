@@ -1,13 +1,33 @@
+import asyncio
+import pytz
+from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from bot.database import (
     get_tickets_paginated, get_tickets_count, get_ticket,
-    update_ticket_admin, close_ticket_status, get_ticket_by_ref, save_message_ref,get_admin_notifications
+    update_ticket_admin, close_ticket_status, get_ticket_by_ref,
+    save_message_ref, get_admin_notifications
 )
-from bot.keyboards import tickets_list_kb, ticket_take_kb, feedback_kb
+from bot.keyboards import tickets_list_kb, feedback_kb
 from bot.config import ADMIN_IDS
 
 router = Router()
+
+
+# Функция-таймер автозакрытия
+async def set_timer_autoclose(ticket_id: int, bot: Bot, delay_hours: int = 3):
+    """Ждет 3 часа и закрывает тикет, если он все еще открыт"""
+    await asyncio.sleep(delay_hours * 3600)
+    ticket = await get_ticket(ticket_id)
+    if ticket and ticket['status'] == 'open':
+        await close_ticket_status(ticket_id)
+        try:
+            await bot.send_message(
+                ticket['user_id'],
+                f"📟 Заявка №{ticket_id} была закрыта автоматически (истекло время ожидания)."
+            )
+        except:
+            pass
 
 
 @router.callback_query(F.data.startswith("take_"))
@@ -19,114 +39,91 @@ async def take_ticket(callback: CallbackQuery, bot: Bot):
         await callback.answer("⚠️ Эту заявку уже забрали!")
         return
 
+    # 1. Назначаем админа
     await update_ticket_admin(tid, callback.from_user.id)
 
-    # Можно извлечь старый текст из сообщения, чтобы не потерять его при редактировании
-    old_text = callback.message.text.split("📝 Текст:")[0] if "📝 Текст:" in callback.message.text else f"Заявка №{tid}"
+    # 2. Уведомляем пользователя (добавленная функция)
+    try:
+        await bot.send_message(
+            chat_id=int(ticket['user_id']),
+            text=f"👨‍💻 <b>Оператор подключился к диалогу.</b>\nЗаявка №{tid}. Вы можете писать сюда.",
+            parse_mode="HTML"
+        )
+    except:
+        pass
 
+    # 3. ПЕРЕСЫЛКА ПЕРВОГО СООБЩЕНИЯ (строго по логике коммита)
+    try:
+        sent = await bot.copy_message(
+            chat_id=callback.from_user.id,
+            from_chat_id=int(ticket['user_id']),
+            message_id=int(ticket['first_msg_id'])
+        )
+        # Привязываем для Reply
+        await save_message_ref(callback.from_user.id, sent.message_id, tid)
+    except Exception as e:
+        await callback.message.answer(f"⚠️ Ошибка копирования первого сообщения: {e}")
+
+    # 4. Обновляем уведомления (редактируем сообщение в топике/личке)
     notifications = await get_admin_notifications(tid)
     for auth in notifications:
         try:
             await bot.edit_message_text(
                 chat_id=auth['admin_id'],
                 message_id=auth['message_id'],
-                text=f"{old_text}\n\n✅ <b>Взял: @{callback.from_user.username}</b>",
-                parse_mode="HTML"
+                text=f"✅ Заявку №{tid} взял @{callback.from_user.username or callback.from_user.id}"
             )
+            # Также привязываем отредактированное сообщение для ответов
             await save_message_ref(auth['admin_id'], auth['message_id'], tid)
         except:
             pass
 
-    # 2. АВТО-ПЕРЕСЫЛКА ПЕРВОГО СООБЩЕНИЯ
-    try:
-        sent = await bot.copy_message(
-            chat_id=callback.from_user.id,
-            from_chat_id=ticket['user_id'],
-            message_id=ticket['first_msg_id']
-        )
-        # Регистрируем это скопированное сообщение в базе ответов
-        await save_message_ref(callback.from_user.id, sent.message_id, tid)
-
-        await callback.message.answer("👆 Выше первое сообщение пользователя. Ответьте на него через Reply.")
-    except Exception as e:
-        await callback.message.answer(
-            "⚠️ Не удалось переслать текст первого сообщения, но вы можете ждать новых сообщений от юзера.")
-
-    await bot.send_message(ticket['user_id'], f"👨‍💻 Оператор на связи.")
-    await callback.answer()
+    await callback.answer("Заявка принята!")
 
 
-# Хендлер ответа (Админ -> Юзер)
 @router.message(F.reply_to_message)
 async def admin_reply(message: Message, bot: Bot):
+    """Ответ админа пользователю через Reply"""
     if message.from_user.id not in ADMIN_IDS:
         return
 
-    # Пытаемся найти ID тикета по сообщению, на которое ответил админ
+    # Находим ID заявки по сообщению, на которое отвечаем
     tid = await get_ticket_by_ref(message.chat.id, message.reply_to_message.message_id)
-
-    if tid:
-        ticket = await get_ticket(tid)
-        if message.text == "/close":
-            # МЫ НЕ ВЫЗЫВАЕМ close_ticket_status(tid) ЗДЕСЬ!
-            # Мы просто спрашиваем пользователя
-            await bot.send_message(
-                ticket['user_id'],
-                f"🛠 Ваша проблема по заявке №{tid} решена?",
-                reply_markup=feedback_kb(tid)
-            )
-            await message.answer(f"⏳ Запрос на подтверждение закрытия №{tid} отправлен пользователю.")
-            return
-        else:
-            # Пересылаем ответ пользователю
-            await bot.copy_message(ticket['user_id'], message.chat.id, message.message_id)
-    else:
-        # Если админ ответил на сообщение, которого нет в базе связок
-        await message.answer(
-            "⚠️ Не удалось найти заявку для этого сообщения. Отвечайте именно на сообщение пользователя.")
-
-
-@router.callback_query(F.data.startswith("solved_"))
-async def handle_feedback(callback: CallbackQuery, bot: Bot):
-    data = callback.data.split("_")
-    answer = data[1]  # "yes" или "no"
-    tid = int(data[2])
+    if not tid:
+        return  # Если это просто какой-то левый реплай — игнорим
 
     ticket = await get_ticket(tid)
-    if not ticket:
-        await callback.answer("Заявка не найдена.")
+
+    # Команда закрытия
+    if message.text == "/close":
+        await bot.send_message(
+            ticket['user_id'],
+            f"🛠 Оператор считает проблему по заявке №{tid} решенной. Это так?",
+            reply_markup=feedback_kb(tid)
+        )
+        # Запускаем фоновый таймер на 3 часа
+        asyncio.create_task(set_timer_autoclose(tid, bot))
+        await message.answer(f"⏳ Запрос подтверждения отправлен. Автозакрытие через 3 часа.")
         return
 
-    if answer == "yes":
-        # Окончательно закрываем тикет в БД
-        await close_ticket_status(tid)
-        await callback.message.edit_text("✅ Спасибо за отзыв! Мы рады, что помогли. Заявка закрыта.")
+    # Обычная пересылка ответа пользователю
+    try:
+        await bot.send_message(
+            ticket['user_id'],
+            f"<b>Ответ поддержки:</b>\n{message.text}",
+            parse_mode="HTML"
+        )
+        await message.answer("✔️ Отправлено")
+    except Exception as e:
+        await message.answer(f"❌ Не удалось доставить: {e}")
 
-        # Уведомляем админа, что всё ок
-        if ticket['admin_id']:
-            await bot.send_message(
-                ticket['admin_id'],
-                f"✅ Пользователь подтвердил решение по заявке №{tid}. Она перемещена в архив."
-            )
 
-    elif answer == "no":
-        # Тикет остается open (мы его и не закрывали окончательно в БД)
-        await callback.message.edit_text("⚠️ Заявка возвращена в работу. Оператор скоро свяжется с вами.")
-
-        # Уведомляем админа о проблеме
-        if ticket['admin_id']:
-            await bot.send_message(
-                ticket['admin_id'],
-                f"❌ <b>Внимание!</b>\nПользователь сообщил, что проблема по заявке №{tid} <b>НЕ РЕШЕНА</b>. Она остается открытой, продолжайте диалог.",
-                parse_mode="HTML"
-            )
-
-    await callback.answer()
-
+# --- ПАГИНАЦИЯ И СПИСКИ ---
 
 @router.message(F.text.in_(["Открытые заявки", "Архив заявок"]))
-async def list_tickets_handler(message: Message):
-    if message.from_user.id not in ADMIN_IDS: return
+async def list_tickets(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
 
     status = 'open' if message.text == "Открытые заявки" else 'closed'
     count = await get_tickets_count(status)
@@ -143,8 +140,8 @@ async def list_tickets_handler(message: Message):
 
 
 @router.callback_query(F.data.startswith("list_"))
-async def list_navigation_callback(callback: CallbackQuery):
-    # Формат: list_status_page
+async def list_nav(callback: CallbackQuery):
+    """Навигация по страницам (Вперед/Назад)"""
     _, status, page = callback.data.split("_")
     page = int(page)
 
@@ -158,15 +155,15 @@ async def list_navigation_callback(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("view_"))
-async def view_ticket_callback(callback: CallbackQuery):
+async def view_ticket(callback: CallbackQuery):
+    """Краткая инфо по тикету из списка"""
     tid = int(callback.data.split("_")[1])
-    ticket = await get_ticket(tid)  # Эта функция уже есть в твоем коммите
+    ticket = await get_ticket(tid)
 
     text = (
         f"🎫 <b>Заявка №{tid}</b>\n"
-        f"👤 ID пользователя: <code>{ticket['user_id']}</code>\n"
-        f"📊 Статус: {'Открыта' if ticket['status'] == 'open' else 'Закрыта'}\n"
-        f"👷 Админ: {ticket['admin_id'] if ticket['admin_id'] else 'Не назначен'}"
+        f"👤 Юзер: <code>{ticket['user_id']}</code>\n"
+        f"📊 Статус: {'Открыта' if ticket['status'] == 'open' else 'Закрыта'}"
     )
     await callback.message.answer(text, parse_mode="HTML")
     await callback.answer()
