@@ -163,3 +163,12 @@ async def get_ticket_logs(ticket_id):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM ticket_logs WHERE ticket_id = ? ORDER BY timestamp ASC", (ticket_id,)) as cursor:
             return await cursor.fetchall()
+
+async def clear_old_logs(days=30):
+    """Удаляет логи переписки старше N дней"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # 86400 секунд в сутках
+        cutoff = int(time.time()) - (days * 86400)
+        cursor = await db.execute("DELETE FROM ticket_logs WHERE timestamp < ?", (cutoff,))
+        await db.commit()
+        return cursor.rowcount # Возвращает количество удаленных строк

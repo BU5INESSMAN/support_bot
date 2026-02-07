@@ -21,7 +21,6 @@ router = Router()
 
 
 def is_working_hours():
-    """Проверка, входит ли текущее время в рабочий диапазон"""
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
     return WORK_START <= now.hour < WORK_END
@@ -29,7 +28,6 @@ def is_working_hours():
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
-    """Приветствие: админам — меню, юзерам — приглашение писать"""
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
             "🛠 Панель администратора активирована.\nИспользуйте кнопки меню для управления заявками.",
@@ -45,7 +43,6 @@ async def cmd_start(message: Message):
 
 @router.callback_query(F.data.startswith("solved_"))
 async def handle_feedback(callback: CallbackQuery, bot: Bot):
-    """Обработка кнопок 'Да/Нет' от пользователя при закрытии"""
     _, answer, tid = callback.data.split("_")
     tid = int(tid)
     ticket = await get_ticket(tid)
@@ -60,7 +57,6 @@ async def handle_feedback(callback: CallbackQuery, bot: Bot):
         if ticket and ticket['admin_id']:
             await bot.send_message(ticket['admin_id'],
                                    f"❌ Пользователь сообщил, что проблема по заявке №{tid} НЕ решена.")
-
     await callback.answer()
 
 
@@ -70,20 +66,18 @@ async def handle_user_msg(message: Message, bot: Bot):
 
     active_tid = await get_active_ticket(message.from_user.id)
 
-    # СОЗДАНИЕ НОВОЙ ЗАЯВКИ
     if not active_tid:
-        # Проверка часов (наша функция)
         if not is_working_hours():
             await message.answer(f"🌙 Сейчас нерабочее время ({WORK_START}:00-{WORK_END}:00 МСК). Мы ответим позже.")
-            # Но заявку все равно создаем!
 
         tid = await create_ticket(message.from_user.id, message.message_id)
-
-        # Текст для топика
         user_text = message.text or message.caption or "[Медиа]"
+
+        # Сохраняем самое первое сообщение в лог
+        await add_log(tid, "USER", user_text)
+
         alert = f"🆕 <b>Новая заявка №{tid}</b>\n👤 От: @{message.from_user.username}\n📝 Текст: {user_text[:200]}"
 
-        # Отправка в топик (наша функция)
         try:
             grp = await bot.send_message(LOG_CHAT_ID, alert, message_thread_id=TIKCET_TOPIC_ID,
                                          reply_markup=ticket_take_kb(tid), parse_mode="HTML")
@@ -91,7 +85,6 @@ async def handle_user_msg(message: Message, bot: Bot):
         except:
             pass
 
-        # В личку админам
         for aid in ADMIN_IDS:
             try:
                 sent = await bot.send_message(aid, alert, reply_markup=ticket_take_kb(tid), parse_mode="HTML")
@@ -102,7 +95,6 @@ async def handle_user_msg(message: Message, bot: Bot):
         await message.answer(f"✅ Заявка №{tid} создана. Ожидайте оператора.")
         return
 
-    # ПЕРЕСЫЛКА ПОСЛЕДУЮЩИХ СООБЩЕНИЙ (если заявка уже есть)
     ticket = await get_ticket(active_tid)
     if ticket and ticket['admin_id']:
         try:
@@ -111,11 +103,10 @@ async def handle_user_msg(message: Message, bot: Bot):
                 from_chat_id=message.chat.id,
                 message_id=message.message_id
             )
-            # Когда юзер пишет:
+            # Сохраняем каждое последующее сообщение юзера в лог
             await add_log(active_tid, "USER", message.text or "[Медиа]")
             await save_message_ref(int(ticket['admin_id']), sent.message_id, active_tid)
         except Exception as e:
             logging.error(f"Error forwarding: {e}")
     else:
-        # Если заявка есть, но кнопку еще не нажали
         await message.answer("⏳ Оператор еще не подключился к вашей заявке №{}. Ожидайте.".format(active_tid))

@@ -6,7 +6,7 @@ from aiogram.types import Message, CallbackQuery
 from bot.database import (
     get_tickets_paginated, get_tickets_count, get_ticket,
     update_ticket_admin, close_ticket_status, get_ticket_by_ref,
-    save_message_ref, get_admin_notifications, get_ticket_logs, add_log
+    save_message_ref, get_admin_notifications, get_ticket_logs, add_log, clear_old_logs
 )
 from bot.keyboards import tickets_list_kb, feedback_kb, ticket_view_kb
 from bot.config import ADMIN_IDS
@@ -42,7 +42,7 @@ async def take_ticket(callback: CallbackQuery, bot: Bot):
     # 1. Назначаем админа
     await update_ticket_admin(tid, callback.from_user.id)
 
-    # 2. Уведомляем пользователя (добавленная функция)
+    # 2. Уведомляем пользователя
     try:
         await bot.send_message(
             chat_id=int(ticket['user_id']),
@@ -52,19 +52,18 @@ async def take_ticket(callback: CallbackQuery, bot: Bot):
     except:
         pass
 
-    # 3. ПЕРЕСЫЛКА ПЕРВОГО СООБЩЕНИЯ (строго по логике коммита)
+    # 3. ПЕРЕСЫЛКА ПЕРВОГО СООБЩЕНИЯ
     try:
         sent = await bot.copy_message(
             chat_id=callback.from_user.id,
             from_chat_id=int(ticket['user_id']),
             message_id=int(ticket['first_msg_id'])
         )
-        # Привязываем для Reply
         await save_message_ref(callback.from_user.id, sent.message_id, tid)
     except Exception as e:
         await callback.message.answer(f"⚠️ Ошибка копирования первого сообщения: {e}")
 
-    # 4. Обновляем уведомления (редактируем сообщение в топике/личке)
+    # 4. Обновляем уведомления
     notifications = await get_admin_notifications(tid)
     for auth in notifications:
         try:
@@ -73,7 +72,6 @@ async def take_ticket(callback: CallbackQuery, bot: Bot):
                 message_id=auth['message_id'],
                 text=f"✅ Заявку №{tid} взял @{callback.from_user.username or callback.from_user.id}"
             )
-            # Также привязываем отредактированное сообщение для ответов
             await save_message_ref(auth['admin_id'], auth['message_id'], tid)
         except:
             pass
@@ -87,26 +85,22 @@ async def admin_reply(message: Message, bot: Bot):
     if message.from_user.id not in ADMIN_IDS:
         return
 
-    # Находим ID заявки по сообщению, на которое отвечаем
     tid = await get_ticket_by_ref(message.chat.id, message.reply_to_message.message_id)
     if not tid:
-        return  # Если это просто какой-то левый реплай — игнорим
+        return
 
     ticket = await get_ticket(tid)
 
-    # Команда закрытия
     if message.text == "/close":
         await bot.send_message(
             ticket['user_id'],
             f"🛠 Оператор считает проблему по заявке №{tid} решенной. Это так?",
             reply_markup=feedback_kb(tid)
         )
-        # Запускаем фоновый таймер на 3 часа
         asyncio.create_task(set_timer_autoclose(tid, bot))
         await message.answer(f"⏳ Запрос подтверждения отправлен. Автозакрытие через 3 часа.")
         return
 
-    # Обычная пересылка ответа пользователю
     try:
         await bot.send_message(
             ticket['user_id'],
@@ -114,12 +108,11 @@ async def admin_reply(message: Message, bot: Bot):
             parse_mode="HTML"
         )
         await message.answer("✔️ Отправлено")
+        # Сохраняем ответ админа в историю
         await add_log(tid, "ADMIN", message.text)
     except Exception as e:
         await message.answer(f"❌ Не удалось доставить: {e}")
 
-
-# --- ПАГИНАЦИЯ И СПИСКИ ---
 
 @router.message(F.text.in_(["Открытые заявки", "Архив заявок"]))
 async def list_tickets(message: Message):
@@ -142,16 +135,11 @@ async def list_tickets(message: Message):
 
 @router.callback_query(F.data.startswith("list_"))
 async def list_nav(callback: CallbackQuery):
-    """Навигация по страницам (Вперед/Назад)"""
     _, status, page = callback.data.split("_")
     page = int(page)
-
     count = await get_tickets_count(status)
     tickets = await get_tickets_paginated(status, page)
-
-    await callback.message.edit_reply_markup(
-        reply_markup=tickets_list_kb(tickets, page, count, status)
-    )
+    await callback.message.edit_reply_markup(reply_markup=tickets_list_kb(tickets, page, count, status))
     await callback.answer()
 
 
@@ -164,10 +152,7 @@ async def view_ticket(callback: CallbackQuery, bot: Bot):
         await callback.answer("Заявка не найдена.")
         return
 
-    # Определяем статус текстом
     status_text = "✅ Открыта" if ticket['status'] == 'open' else "📁 В архиве"
-
-    # Формируем дату создания
     created_date = datetime.fromtimestamp(ticket['created_at']).strftime('%d.%m.%Y %H:%M')
 
     text = (
@@ -178,35 +163,43 @@ async def view_ticket(callback: CallbackQuery, bot: Bot):
         f"👨‍💻 <b>Админ:</b> {ticket['admin_id'] if ticket['admin_id'] else 'Не назначен'}"
     )
 
-    # Отправляем карточку заявки с кнопкой просмотра истории
+    # Добавляем кнопку просмотра истории
     await callback.message.answer(text, reply_markup=ticket_view_kb(tid), parse_mode="HTML")
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("view_"))
+@router.callback_query(F.data.startswith("history_"))
 async def view_ticket_history(callback: CallbackQuery):
+    """Показ истории переписки"""
     tid = int(callback.data.split("_")[1])
-    ticket = await get_ticket(tid)
     logs = await get_ticket_logs(tid)
 
-    status_emoji = "🟢" if ticket['status'] == 'open' else "🔴"
-    header = f"{status_emoji} <b>История заявки №{tid}</b>\n"
-    header += f"👤 Юзер ID: <code>{ticket['user_id']}</code>\n"
-    header += f"📅 Создана: {datetime.fromtimestamp(ticket['created_at']).strftime('%d.%m %H:%M')}\n"
-    header += "--------------------------\n"
-
     if not logs:
-        history_text = "Логи переписки пусты или не велись."
-    else:
-        history_text = ""
-        for log in logs:
-            role_label = "👤 Юзер" if log['sender_role'] == "USER" else "👨‍💻 Админ"
-            history_text += f"<b>{role_label}:</b> {log['text']}\n"
+        await callback.answer("История переписки пуста (сообщения до обновления не сохранились).", show_alert=True)
+        return
 
-    # Если текст слишком длинный, Телеграм его не пропустит (лимит 4096 символов)
-    full_text = header + history_text
-    if len(full_text) > 4000:
-        full_text = full_text[:3900] + "\n... (слишком длинная история)"
+    history_text = f"📖 <b>История заявки №{tid}:</b>\n\n"
+    for log in logs:
+        role_label = "👤 Юзер" if log['sender_role'] == "USER" else "👨‍💻 Админ"
+        history_text += f"<b>{role_label}:</b> {log['text']}\n"
 
-    await callback.message.answer(full_text, parse_mode="HTML")
+    if len(history_text) > 4000:
+        history_text = history_text[:3900] + "\n... (слишком длинная история)"
+
+    await callback.message.answer(history_text, parse_mode="HTML")
     await callback.answer()
+
+@router.message(F.text == "/clear_logs")
+async def cmd_clear_logs(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    # По умолчанию удаляем логи старше 30 дней
+    deleted_count = await clear_old_logs(days=30)
+
+    await message.answer(
+        f"🧹 <b>Очистка завершена!</b>\n\n"
+        f"Удалено записей: <code>{deleted_count}</code>\n"
+        f"Оставлены логи за последние 30 дней.",
+        parse_mode="HTML"
+    )

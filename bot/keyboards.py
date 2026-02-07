@@ -61,6 +61,7 @@ def feedback_kb(ticket_id):
 
 def ticket_view_kb(ticket_id):
     """Клавиатура с кнопкой просмотра истории переписки"""
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📖 Просмотреть переписку", callback_data=f"history_{ticket_id}")]
     ])
