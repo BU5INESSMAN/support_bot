@@ -122,3 +122,51 @@ async def handle_feedback(callback: CallbackQuery, bot: Bot):
             )
 
     await callback.answer()
+
+
+@router.message(F.text.in_(["Открытые заявки", "Архив заявок"]))
+async def list_tickets_handler(message: Message):
+    if message.from_user.id not in ADMIN_IDS: return
+
+    status = 'open' if message.text == "Открытые заявки" else 'closed'
+    count = await get_tickets_count(status)
+    tickets = await get_tickets_paginated(status, page=1)
+
+    if not tickets:
+        await message.answer(f"Список {message.text.lower()} пуст.")
+        return
+
+    await message.answer(
+        f"📂 {message.text}:",
+        reply_markup=tickets_list_kb(tickets, 1, count, status)
+    )
+
+
+@router.callback_query(F.data.startswith("list_"))
+async def list_navigation_callback(callback: CallbackQuery):
+    # Формат: list_status_page
+    _, status, page = callback.data.split("_")
+    page = int(page)
+
+    count = await get_tickets_count(status)
+    tickets = await get_tickets_paginated(status, page)
+
+    await callback.message.edit_reply_markup(
+        reply_markup=tickets_list_kb(tickets, page, count, status)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("view_"))
+async def view_ticket_callback(callback: CallbackQuery):
+    tid = int(callback.data.split("_")[1])
+    ticket = await get_ticket(tid)  # Эта функция уже есть в твоем коммите
+
+    text = (
+        f"🎫 <b>Заявка №{tid}</b>\n"
+        f"👤 ID пользователя: <code>{ticket['user_id']}</code>\n"
+        f"📊 Статус: {'Открыта' if ticket['status'] == 'open' else 'Закрыта'}\n"
+        f"👷 Админ: {ticket['admin_id'] if ticket['admin_id'] else 'Не назначен'}"
+    )
+    await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()

@@ -125,3 +125,19 @@ async def get_admin_notifications(ticket_id):
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM admin_notifications WHERE ticket_id = ?", (ticket_id,)) as cursor:
             return await cursor.fetchall()
+
+async def get_tickets_count(status='open'):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM tickets WHERE status = ?", (status,)) as cursor:
+            res = await cursor.fetchone()
+            return res[0] if res else 0
+
+async def get_tickets_paginated(status='open', page=1, per_page=10):
+    offset = (page - 1) * per_page
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM tickets WHERE status = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+            (status, per_page, offset)
+        ) as cursor:
+            return await cursor.fetchall()

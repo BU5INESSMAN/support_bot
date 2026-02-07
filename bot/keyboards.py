@@ -1,5 +1,6 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 import math
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 def admin_main_menu():
@@ -19,27 +20,37 @@ def ticket_take_kb(ticket_id):
     ])
 
 
-def tickets_list_kb(tickets: list, page: int, total_count: int, status: str):
-    builder = []
-    for t in tickets:
-        # Обработка того, что t может быть объектом Row или словарем
-        t_id = t['id'] if isinstance(t, dict) or hasattr(t, '__getitem__') else t.id
-        builder.append([InlineKeyboardButton(text=f"Заявка №{t_id}", callback_data=f"view_{t_id}")])
+# Добавь в bot/keyboards.py
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import math
 
+
+def tickets_list_kb(tickets, page, total_count, status):
+    builder = InlineKeyboardBuilder()
+
+    # Кнопки заявок
+    for t in tickets:
+        builder.button(text=f"🎫 №{t['id']}", callback_data=f"view_{t['id']}")
+
+    builder.adjust(2)  # Список заявок в 2 колонки
+
+    # Ряд навигации
+    nav_buttons = []
     total_pages = math.ceil(total_count / 10)
-    nav_row = []
+
     if page > 1:
-        nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"list_{status}_{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="⬅️", callback_data=f"list_{status}_{page - 1}"))
 
     if total_pages > 1:
-        nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="none"))
+        nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="none"))
 
     if page < total_pages:
-        nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"list_{status}_{page + 1}"))
+        nav_buttons.append(InlineKeyboardButton(text="➡️", callback_data=f"list_{status}_{page + 1}"))
 
-    if nav_row:
-        builder.append(nav_row)
-    return InlineKeyboardMarkup(inline_keyboard=builder)
+    if nav_buttons:
+        builder.row(*nav_buttons)
+
+    return builder.as_markup()
 
 
 def feedback_kb(ticket_id):
@@ -47,3 +58,4 @@ def feedback_kb(ticket_id):
         [InlineKeyboardButton(text="✅ Да", callback_data=f"solved_yes_{ticket_id}"),
          InlineKeyboardButton(text="❌ Нет", callback_data=f"solved_no_{ticket_id}")]
     ])
+
