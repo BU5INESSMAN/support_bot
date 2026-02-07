@@ -59,3 +59,8 @@ def feedback_kb(ticket_id):
          InlineKeyboardButton(text="❌ Нет", callback_data=f"solved_no_{ticket_id}")]
     ])
 
+def ticket_view_kb(ticket_id):
+    """Клавиатура с кнопкой просмотра истории переписки"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📖 Просмотреть переписку", callback_data=f"history_{ticket_id}")]
+    ])

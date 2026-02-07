@@ -7,7 +7,7 @@ from bot.database import (
     save_admin_notification,
     save_message_ref,
     get_ticket,
-    close_ticket_status
+    close_ticket_status, add_log
 )
 from bot.config import (
     ADMIN_IDS, SERVICE_NAME, LOG_CHAT_ID,
@@ -111,6 +111,8 @@ async def handle_user_msg(message: Message, bot: Bot):
                 from_chat_id=message.chat.id,
                 message_id=message.message_id
             )
+            # Когда юзер пишет:
+            await add_log(active_tid, "USER", message.text or "[Медиа]")
             await save_message_ref(int(ticket['admin_id']), sent.message_id, active_tid)
         except Exception as e:
             logging.error(f"Error forwarding: {e}")

@@ -47,6 +47,19 @@ async def init_db():
                              INTEGER
                          )
                          """)
+        await db.execute("""
+                         CREATE TABLE IF NOT EXISTS ticket_logs
+                         (
+                             ticket_id
+                             INTEGER,
+                             sender_role
+                             TEXT,
+                             text
+                             TEXT,
+                             timestamp
+                             INTEGER
+                         )
+                         """)
         await db.commit()
 
 async def create_ticket(user_id, first_msg_id):
@@ -137,4 +150,16 @@ async def get_tickets_paginated(status='open', page=1, per_page=10):
             "SELECT * FROM tickets WHERE status = ? ORDER BY id DESC LIMIT ? OFFSET ?",
             (status, per_page, offset)
         ) as cursor:
+            return await cursor.fetchall()
+
+async def add_log(ticket_id, role, text):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO ticket_logs VALUES (?, ?, ?, ?)",
+                         (ticket_id, role, text, int(time.time())))
+        await db.commit()
+
+async def get_ticket_logs(ticket_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM ticket_logs WHERE ticket_id = ? ORDER BY timestamp ASC", (ticket_id,)) as cursor:
             return await cursor.fetchall()

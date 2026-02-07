@@ -6,9 +6,9 @@ from aiogram.types import Message, CallbackQuery
 from bot.database import (
     get_tickets_paginated, get_tickets_count, get_ticket,
     update_ticket_admin, close_ticket_status, get_ticket_by_ref,
-    save_message_ref, get_admin_notifications
+    save_message_ref, get_admin_notifications, get_ticket_logs, add_log
 )
-from bot.keyboards import tickets_list_kb, feedback_kb
+from bot.keyboards import tickets_list_kb, feedback_kb, ticket_view_kb
 from bot.config import ADMIN_IDS
 
 router = Router()
@@ -114,6 +114,7 @@ async def admin_reply(message: Message, bot: Bot):
             parse_mode="HTML"
         )
         await message.answer("✔️ Отправлено")
+        await add_log(tid, "ADMIN", message.text)
     except Exception as e:
         await message.answer(f"❌ Не удалось доставить: {e}")
 
@@ -155,15 +156,57 @@ async def list_nav(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("view_"))
-async def view_ticket(callback: CallbackQuery):
-    """Краткая инфо по тикету из списка"""
+async def view_ticket(callback: CallbackQuery, bot: Bot):
     tid = int(callback.data.split("_")[1])
     ticket = await get_ticket(tid)
 
+    if not ticket:
+        await callback.answer("Заявка не найдена.")
+        return
+
+    # Определяем статус текстом
+    status_text = "✅ Открыта" if ticket['status'] == 'open' else "📁 В архиве"
+
+    # Формируем дату создания
+    created_date = datetime.fromtimestamp(ticket['created_at']).strftime('%d.%m.%Y %H:%M')
+
     text = (
-        f"🎫 <b>Заявка №{tid}</b>\n"
-        f"👤 Юзер: <code>{ticket['user_id']}</code>\n"
-        f"📊 Статус: {'Открыта' if ticket['status'] == 'open' else 'Закрыта'}"
+        f"🎫 <b>Заявка №{tid}</b>\n\n"
+        f"📊 <b>Статус:</b> {status_text}\n"
+        f"👤 <b>Юзер:</b> <code>{ticket['user_id']}</code>\n"
+        f"📅 <b>Создана:</b> {created_date}\n"
+        f"👨‍💻 <b>Админ:</b> {ticket['admin_id'] if ticket['admin_id'] else 'Не назначен'}"
     )
-    await callback.message.answer(text, parse_mode="HTML")
+
+    # Отправляем карточку заявки с кнопкой просмотра истории
+    await callback.message.answer(text, reply_markup=ticket_view_kb(tid), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("view_"))
+async def view_ticket_history(callback: CallbackQuery):
+    tid = int(callback.data.split("_")[1])
+    ticket = await get_ticket(tid)
+    logs = await get_ticket_logs(tid)
+
+    status_emoji = "🟢" if ticket['status'] == 'open' else "🔴"
+    header = f"{status_emoji} <b>История заявки №{tid}</b>\n"
+    header += f"👤 Юзер ID: <code>{ticket['user_id']}</code>\n"
+    header += f"📅 Создана: {datetime.fromtimestamp(ticket['created_at']).strftime('%d.%m %H:%M')}\n"
+    header += "--------------------------\n"
+
+    if not logs:
+        history_text = "Логи переписки пусты или не велись."
+    else:
+        history_text = ""
+        for log in logs:
+            role_label = "👤 Юзер" if log['sender_role'] == "USER" else "👨‍💻 Админ"
+            history_text += f"<b>{role_label}:</b> {log['text']}\n"
+
+    # Если текст слишком длинный, Телеграм его не пропустит (лимит 4096 символов)
+    full_text = header + history_text
+    if len(full_text) > 4000:
+        full_text = full_text[:3900] + "\n... (слишком длинная история)"
+
+    await callback.message.answer(full_text, parse_mode="HTML")
     await callback.answer()
