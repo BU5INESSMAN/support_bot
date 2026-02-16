@@ -21,6 +21,7 @@ router = Router()
 
 
 def is_working_hours():
+    """Проверка, входит ли текущее время в рабочий диапазон"""
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
     return WORK_START <= now.hour < WORK_END
@@ -28,15 +29,15 @@ def is_working_hours():
 
 @router.message(F.text == "/start")
 async def cmd_start(message: Message):
+    """Приветствие: админам — меню, юзерам — приглашение писать"""
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
-            "🛠 Панель администратора активирована.\nИспользуйте кнопки меню для управления заявками.\n\nДля ответа на сообщение пользователя используйте <i>Reply</i>\n\nКоманды администратора:\n/close (<i>Reply</i> на сообщение) - Закрытие заявки\n/clear_logs - Отчистка логов (старше 30 дней)",
+            "🛠 Панель администратора активирована.\nИспользуйте кнопки меню для управления заявками.",
             reply_markup=admin_main_menu()
         )
     else:
         await message.answer(
             f"Привет! Это техподдержка <b>{SERVICE_NAME}</b>\n"
-            "К вашему сообщению вы можете приложить:<i>Фото</i>,<i>Видео</i>,<i>PDF</i>"
             "Опишите вашу проблему в одном сообщении, и мы вам поможем!",
             parse_mode="HTML"
         )
@@ -71,10 +72,13 @@ async def handle_user_msg(message: Message, bot: Bot):
         if not is_working_hours():
             await message.answer(f"🌙 Сейчас нерабочее время ({WORK_START}:00-{WORK_END}:00 МСК). Мы ответим позже.")
 
+        # Создаем заявку
         tid = await create_ticket(message.from_user.id, message.message_id)
+        
+        # Определяем текст для уведомления и лога
         user_text = message.text or message.caption or "[Медиа]"
-
-        # Сохраняем самое первое сообщение в лог
+        
+        # Сохраняем ПЕРВОЕ сообщение в историю
         await add_log(tid, "USER", user_text)
 
         alert = f"🆕 <b>Новая заявка №{tid}</b>\n👤 От: @{message.from_user.username}\n📝 Текст: {user_text[:200]}"
@@ -96,18 +100,20 @@ async def handle_user_msg(message: Message, bot: Bot):
         await message.answer(f"✅ Заявка №{tid} создана. Ожидайте оператора.")
         return
 
+    # ПЕРЕСЫЛКА ПОСЛЕДУЮЩИХ СООБЩЕНИЙ
     ticket = await get_ticket(active_tid)
     if ticket and ticket['admin_id']:
         try:
+            # Используем copy_message для поддержки фото/видео/текста
             sent = await bot.copy_message(
                 chat_id=int(ticket['admin_id']),
                 from_chat_id=message.chat.id,
                 message_id=message.message_id
             )
-            # Сохраняем каждое последующее сообщение юзера в лог
-            await add_log(active_tid, "USER", message.text or "[Медиа]")
+            # Логируем
+            await add_log(active_tid, "USER", message.text or message.caption or "[Медиа]")
             await save_message_ref(int(ticket['admin_id']), sent.message_id, active_tid)
         except Exception as e:
             logging.error(f"Error forwarding: {e}")
     else:
-        await message.answer("⏳ Оператор еще не подключился к вашей заявке №{}. Ожидайте.".format(active_tid))
+        await message.answer(f"⏳ Оператор еще не подключился к вашей заявке №{active_tid}. Ожидайте.")
