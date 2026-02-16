@@ -78,7 +78,6 @@ async def take_ticket(callback: CallbackQuery, bot: Bot):
 
     await callback.answer("Заявка принята!")
 
-
 @router.message(F.reply_to_message)
 async def admin_reply(message: Message, bot: Bot):
     """Ответ админа пользователю через Reply"""
@@ -91,6 +90,7 @@ async def admin_reply(message: Message, bot: Bot):
 
     ticket = await get_ticket(tid)
 
+    # Команда закрытия остается без изменений
     if message.text == "/close":
         await bot.send_message(
             ticket['user_id'],
@@ -101,18 +101,22 @@ async def admin_reply(message: Message, bot: Bot):
         await message.answer(f"⏳ Запрос подтверждения отправлен. Автозакрытие через 3 часа.")
         return
 
+    # УНИВЕРСАЛЬНАЯ ПЕРЕСЫЛКА (Фото, Видео, Текст, Документы)
     try:
-        await bot.send_message(
-            ticket['user_id'],
-            f"<b>Ответ поддержки:</b>\n{message.text}",
-            parse_mode="HTML"
+        # Вместо send_message используем copy_message
+        await bot.copy_message(
+            chat_id=ticket['user_id'],
+            from_chat_id=message.chat.id,
+            message_id=message.message_id
         )
+        
+        # Логируем текст (если он есть) или тип медиа
+        log_text = message.text or message.caption or f"[{message.content_type.capitalize()}]"
+        await add_log(tid, "ADMIN", log_text)
+        
         await message.answer("✔️ Отправлено")
-        # Сохраняем ответ админа в историю
-        await add_log(tid, "ADMIN", message.text)
     except Exception as e:
         await message.answer(f"❌ Не удалось доставить: {e}")
-
 
 @router.message(F.text.in_(["Открытые заявки", "Архив заявок"]))
 async def list_tickets(message: Message):
