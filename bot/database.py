@@ -1,7 +1,6 @@
 import aiosqlite
 import logging
-
-DB_PATH = "support_bot.db"
+from bot.config import DB_PATH  # Импортируем единый путь из конфига
 
 
 async def init_db():
@@ -96,7 +95,7 @@ async def get_ticket(ticket_id):
 
 
 async def get_ticket_by_topic(topic_id):
-    """Находит тикет по ID темы в Telegram. Нужно для admin.py"""
+    """Находит тикет по ID темы в Telegram."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM tickets WHERE topic_id = ?", (topic_id,)) as cursor:
@@ -119,7 +118,7 @@ async def add_log(ticket_id, role, text):
 
 
 async def get_ticket_logs(ticket_id):
-    """Возвращает историю переписки по тикету. Нужно для admin.py"""
+    """Возвращает историю переписки по тикету."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -152,6 +151,7 @@ async def cleanup_old_tickets(limit):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
+        # Считаем общее кол-во всех заявок
         async with db.execute("SELECT COUNT(*) FROM tickets") as cursor:
             total_count = (await cursor.fetchone())[0]
 
@@ -160,7 +160,7 @@ async def cleanup_old_tickets(limit):
 
         to_delete_count = total_count - limit
 
-        # Берем только закрытые
+        # Выбираем только закрытые для удаления
         async with db.execute(
                 "SELECT id, topic_id FROM tickets WHERE status = 'closed' ORDER BY id ASC LIMIT ?",
                 (to_delete_count,)
@@ -178,5 +178,5 @@ async def cleanup_old_tickets(limit):
         await db.execute(f"DELETE FROM tickets WHERE id IN ({placeholders})", ids_to_del)
         await db.commit()
 
-        logging.info(f"♻️ Очистка: удалено {len(ids_to_del)} закрытых заявок.")
+        logging.info(f"♻️ Очистка: удалено {len(ids_to_del)} закрытых записей.")
         return topics_to_del
