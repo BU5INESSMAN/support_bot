@@ -33,12 +33,12 @@ async def main():
     scheduler.add_job(send_backup, 'cron', hour=0, minute=0, kwargs={'bot': bot})
     scheduler.start()
 
-    await log_event(bot, "🚀 **Бот техподдержки запущен!**")
+    await log_event(bot, "🚀Бот техподдержки запущен!")
 
     try:
         await dp.start_polling(bot)
     finally:
-        await log_event(bot, "🛑 **Бот остановлен**")
+        await log_event(bot, "🛑Бот остановлен")
         await bot.session.close()
 
 

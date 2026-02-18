@@ -4,7 +4,6 @@ from bot.config import DB_PATH
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица заявок с новым полем topic_id
         await db.execute("""
             CREATE TABLE IF NOT EXISTS tickets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
