@@ -1,4 +1,3 @@
-import asyncio
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from bot.database import (
@@ -10,6 +9,10 @@ from bot.config import ADMIN_IDS, LOG_CHAT_ID
 
 router = Router()
 
+# Кружки для админки
+CIRCLE_RED = "\U0001F534"
+CIRCLE_GREEN = "\U0001F7E2"
+
 
 @router.message(F.chat.id == LOG_CHAT_ID)
 async def handle_admin_reply(message: Message, bot: Bot):
@@ -17,8 +20,7 @@ async def handle_admin_reply(message: Message, bot: Bot):
         return
 
     ticket = await get_ticket_by_topic(message.message_thread_id)
-    if not ticket:
-        return
+    if not ticket: return
 
     if message.text == "/close":
         await bot.send_message(
@@ -44,18 +46,28 @@ async def handle_admin_reply(message: Message, bot: Bot):
 @router.message(F.text.in_(["Открытые заявки", "Архив заявок"]))
 async def list_tickets(message: Message):
     if message.from_user.id not in ADMIN_IDS: return
-    status = 'open' if message.text == "Открытые заявки" else 'closed'
+
+    is_open = message.text == "Открытые заявки"
+    status = 'open' if is_open else 'closed'
+    icon = CIRCLE_RED if is_open else CIRCLE_GREEN
+
     count = await get_tickets_count(status)
     tickets = await get_tickets_paginated(status, 1)
-    await message.answer(f"📂 *{message.text}:*", reply_markup=tickets_list_kb(tickets, 1, count, status),
-                         parse_mode="Markdown")
+
+    await message.answer(
+        f"{icon} *{message.text}:*",
+        reply_markup=tickets_list_kb(tickets, 1, count, status),
+        parse_mode="Markdown"
+    )
 
 
 @router.callback_query(F.data.startswith("view_"))
 async def view_ticket_info(callback: CallbackQuery):
     tid = int(callback.data.split("_")[1])
     ticket = await get_ticket(tid)
-    text = f"🎫 *Заявка №{tid}*\n\n📊 Статус: `{ticket['status']}`\n👤 Юзер: `{ticket['user_id']}`"
+    icon = CIRCLE_RED if ticket['status'] == 'open' else CIRCLE_GREEN
+
+    text = f"🎫 *Заявка №{tid}*\n\n📊 Статус: {icon} `{ticket['status']}`\n👤 Юзер: `{ticket['user_id']}`"
     await callback.message.answer(text, reply_markup=ticket_view_kb(tid), parse_mode="Markdown")
     await callback.answer()
 

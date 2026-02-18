@@ -18,6 +18,9 @@ TIKCET_TOPIC_ID = int(os.getenv("TIKCET_TOPIC_ID") or 0)
 TIMEZONE = os.getenv("TZ", "Europe/Moscow")
 WORK_START = int(os.getenv("WORK_START", 9)) # По умолчанию 09:00
 WORK_END = int(os.getenv("WORK_END", 21))   # По умолчанию 21:00
+TICKETS_LIMIT = int(os.getenv("TICKETS_LIMIT", 50))
+# Ограничим от 5 до 100
+TICKETS_LIMIT = max(5, min(100, TICKETS_LIMIT))
 
 # Путь к БД. data/ - это папка, которая маунтится в Docker
 DB_PATH = "data/database.sqlite"
