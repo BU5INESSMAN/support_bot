@@ -4,62 +4,26 @@ from bot.config import DB_PATH
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
+        # Таблица заявок с новым полем topic_id
         await db.execute("""
-                         CREATE TABLE IF NOT EXISTS tickets
-                         (
-                             id
-                             INTEGER
-                             PRIMARY
-                             KEY
-                             AUTOINCREMENT,
-                             user_id
-                             INTEGER,
-                             admin_id
-                             INTEGER
-                             DEFAULT
-                             NULL,
-                             status
-                             TEXT
-                             DEFAULT
-                             'open',
-                             first_msg_id
-                             INTEGER,
-                             created_at
-                             INTEGER
-                         )
-                         """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS message_refs (
-                admin_chat_id INTEGER,
-                admin_message_id INTEGER,
-                ticket_id INTEGER,
-                PRIMARY KEY (admin_chat_id, admin_message_id)
+            CREATE TABLE IF NOT EXISTS tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                admin_id INTEGER DEFAULT NULL,
+                status TEXT DEFAULT 'open',
+                first_msg_id INTEGER,
+                topic_id INTEGER DEFAULT NULL,
+                created_at INTEGER
             )
         """)
         await db.execute("""
-                         CREATE TABLE IF NOT EXISTS admin_notifications
-                         (
-                             ticket_id
-                             INTEGER,
-                             admin_id
-                             INTEGER,
-                             message_id
-                             INTEGER
-                         )
-                         """)
-        await db.execute("""
-                         CREATE TABLE IF NOT EXISTS ticket_logs
-                         (
-                             ticket_id
-                             INTEGER,
-                             sender_role
-                             TEXT,
-                             text
-                             TEXT,
-                             timestamp
-                             INTEGER
-                         )
-                         """)
+            CREATE TABLE IF NOT EXISTS ticket_logs (
+                ticket_id INTEGER,
+                sender_role TEXT,
+                text TEXT,
+                timestamp INTEGER
+            )
+        """)
         await db.commit()
 
 async def create_ticket(user_id, first_msg_id):
@@ -71,29 +35,22 @@ async def create_ticket(user_id, first_msg_id):
         await db.commit()
         return cursor.lastrowid
 
+async def update_ticket_topic(tid, topic_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE tickets SET topic_id = ? WHERE id = ?", (int(topic_id), int(tid)))
+        await db.commit()
+
+async def get_ticket_by_topic(topic_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM tickets WHERE topic_id = ? AND status = 'open'", (topic_id,)) as cursor:
+            return await cursor.fetchone()
+
 async def get_active_ticket(user_id):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT id FROM tickets WHERE user_id = ? AND status = 'open'", (user_id,)) as cursor:
             row = await cursor.fetchone()
             return int(row[0]) if row else None
-
-async def get_tickets_paginated(status='open', page=1, per_page=10):
-    offset = (page - 1) * per_page
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        # Ограничиваем архив 100 записями по ТЗ
-        limit_val = 100 if status == 'closed' else 1000
-        query = f"SELECT * FROM (SELECT * FROM tickets WHERE status = ? ORDER BY id DESC LIMIT ?) LIMIT ? OFFSET ?"
-        async with db.execute(query, (status, limit_val, per_page, offset)) as cursor:
-            return await cursor.fetchall()
-
-async def get_tickets_count(status='open'):
-    async with aiosqlite.connect(DB_PATH) as db:
-        limit_val = 100 if status == 'closed' else 1000
-        query = f"SELECT COUNT(*) FROM (SELECT id FROM tickets WHERE status = ? LIMIT ?)"
-        async with db.execute(query, (status, limit_val)) as cursor:
-            res = await cursor.fetchone()
-            return res[0]
 
 async def get_ticket(ticket_id):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -101,39 +58,21 @@ async def get_ticket(ticket_id):
         async with db.execute("SELECT * FROM tickets WHERE id = ?", (int(ticket_id),)) as cursor:
             return await cursor.fetchone()
 
-async def update_ticket_admin(tid, admin_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("UPDATE tickets SET admin_id = ? WHERE id = ?", (int(admin_id), int(tid)))
-        await db.commit()
-
 async def close_ticket_status(tid):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("UPDATE tickets SET status = 'closed' WHERE id = ?", (tid,))
         await db.commit()
 
-async def save_message_ref(admin_chat_id, admin_message_id, ticket_id):
+async def add_log(ticket_id, role, text):
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT OR REPLACE INTO message_refs VALUES (?, ?, ?)",
-                         (admin_chat_id, admin_message_id, ticket_id))
+        await db.execute("INSERT INTO ticket_logs VALUES (?, ?, ?, ?)",
+                         (ticket_id, role, text, int(time.time())))
         await db.commit()
 
-async def get_ticket_by_ref(admin_chat_id, admin_message_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT ticket_id FROM message_refs WHERE admin_chat_id = ? AND admin_message_id = ?",
-                             (admin_chat_id, admin_message_id)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else None
-
-async def save_admin_notification(ticket_id, admin_id, message_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO admin_notifications VALUES (?, ?, ?)",
-                         (ticket_id, admin_id, message_id))
-        await db.commit()
-
-async def get_admin_notifications(ticket_id):
+async def get_ticket_logs(ticket_id):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM admin_notifications WHERE ticket_id = ?", (ticket_id,)) as cursor:
+        async with db.execute("SELECT * FROM ticket_logs WHERE ticket_id = ? ORDER BY timestamp ASC", (ticket_id,)) as cursor:
             return await cursor.fetchall()
 
 async def get_tickets_count(status='open'):
@@ -151,24 +90,3 @@ async def get_tickets_paginated(status='open', page=1, per_page=10):
             (status, per_page, offset)
         ) as cursor:
             return await cursor.fetchall()
-
-async def add_log(ticket_id, role, text):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT INTO ticket_logs VALUES (?, ?, ?, ?)",
-                         (ticket_id, role, text, int(time.time())))
-        await db.commit()
-
-async def get_ticket_logs(ticket_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM ticket_logs WHERE ticket_id = ? ORDER BY timestamp ASC", (ticket_id,)) as cursor:
-            return await cursor.fetchall()
-
-async def clear_old_logs(days=30):
-    """Удаляет логи переписки старше N дней"""
-    async with aiosqlite.connect(DB_PATH) as db:
-        # 86400 секунд в сутках
-        cutoff = int(time.time()) - (days * 86400)
-        cursor = await db.execute("DELETE FROM ticket_logs WHERE timestamp < ?", (cutoff,))
-        await db.commit()
-        return cursor.rowcount # Возвращает количество удаленных строк
