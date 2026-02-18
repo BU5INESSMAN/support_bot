@@ -38,16 +38,25 @@ async def handle_feedback(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_text("✅ *Заявка закрыта.*", parse_mode="Markdown")
         if ticket and ticket['topic_id']:
             try:
-                # Формируем имя с сохранением ника/ID
                 user_info = f"@{callback.from_user.username}" if callback.from_user.username else f"ID {ticket['user_id']}"
                 new_name = f"✅ РЕШЕНО | №{tid} | {user_info}"
-
                 await bot.edit_forum_topic(LOG_CHAT_ID, ticket['topic_id'], name=new_name)
                 await bot.close_forum_topic(LOG_CHAT_ID, ticket['topic_id'])
             except Exception as e:
                 logging.error(f"Error closing topic: {e}")
     else:
+        # УВЕДОМЛЕНИЕ АДМИНУ, ЧТО ПРОБЛЕМА НЕ РЕШЕНА
         await callback.message.edit_text("⚠️ *Оператор свяжется с вами.*", parse_mode="Markdown")
+        if ticket and ticket['topic_id']:
+            try:
+                await bot.send_message(
+                    LOG_CHAT_ID,
+                    f"❌ *Внимание!* Пользователь сообщил, что проблема по заявке №{tid} *НЕ решена*.",
+                    message_thread_id=ticket['topic_id'],
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logging.error(f"Error notifying admin: {e}")
     await callback.answer()
 
 
